@@ -1,0 +1,7 @@
+{
+  "pdf_chunk_size": 900,
+  "pdf_overlap": 120,
+  "embedding_backend": "auto",
+  "embedding_model_local": "",
+  "embedding_model_openai": ""
+}
