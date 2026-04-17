@@ -162,6 +162,6 @@ elif query.strip():
     st.info("Click **Run RAG** to query the index.")
 
 st.markdown(
-    "---\n**Submission checklist:** GitHub repo `ai_1002300129`, deploy URL, "
+    "---\n**Submission checklist:** GitHub repo `ai_10022300129`, deploy URL, "
     "invite **GodwinDansoAcity**, email lecturer with subject line format from the QP."
 )

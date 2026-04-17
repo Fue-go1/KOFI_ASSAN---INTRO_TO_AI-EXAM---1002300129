@@ -6,7 +6,7 @@
 
 services:
   - type: web
-    name: ai-1002300129-rag
+    name: ai-10022300129-rag
     runtime: python
     plan: free
     buildCommand: |

@@ -2,7 +2,7 @@
 
 **Student:** Kofi Assan  
 **Index number:** 1002300129  
-**Repository name (submit as):** `ai_1002300129`
+**Repository name (submit as):** `ai_10022300129`
 
 Manual RAG for Academic City: Ghana election results (CSV) + 2025 budget PDF.  
 **No LangChain, LlamaIndex, or pre-built RAG frameworks** — chunking, embeddings, FAISS, retrieval, and prompts are implemented in this repo.
@@ -37,7 +37,7 @@ User query
 2. Create a virtual environment and install dependencies:
 
 ```bash
-cd "c:\Users\HP\Downloads\KOFI_ASSAN - INTRO_TO_AI EXAM - 1002300129"
+cd ai_10022300129
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
@@ -147,7 +147,7 @@ Outputs are written to `experiment_logs/auto_runs/`. You should still write your
 
 ## Submission (from question paper)
 
-- Push to GitHub: repo **`ai_1002300129`** (replace if your index differs).  
+- Push to GitHub: repo **`ai_10022300129`** (replace if your index differs).  
 - Deploy (this repo includes **Render** via `render.yaml`; or use Streamlit Cloud / Railway) and record the public URL.  
 - Add **GodwinDansoAcity** / `godwin.danso@acity.edu.gh` as collaborator.  
 - Email the lecturer with subject: `CS4241-Introduction to Artificial Intelligence-2026:[your index and name]`.  
