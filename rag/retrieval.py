@@ -6,6 +6,7 @@ plus hybrid fusion with manual BM25 keyword scores.
 from __future__ import annotations
 
 import math
+import os
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -103,6 +104,8 @@ def hybrid_retrieve(
     """
     if not store.chunks:
         return []
+    if os.environ.get("FORCE_BM25_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return _bm25_only_retrieve(store, query, k=k)
     try:
         q_vec = embed_query(query)
     except Exception:
@@ -168,6 +171,8 @@ def retrieve_with_optional_expansion(
 
 def pure_vector_topk(store: FaissStore, query: str, k: int = 8) -> list[RetrievalHit]:
     """Baseline for Part E comparison (no BM25 fusion)."""
+    if os.environ.get("FORCE_BM25_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return _bm25_only_retrieve(store, query, k=k)
     try:
         q_vec = embed_query(query)
     except Exception:
