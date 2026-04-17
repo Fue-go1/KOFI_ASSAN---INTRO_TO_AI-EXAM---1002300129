@@ -1,0 +1,11 @@
+Student: Kofi Assan | Index: 1002300129 | CS4241
+
+Use this folder for MANUAL experiment logs (not AI-generated summaries).
+For each run, create a dated file, e.g. 2026-04-17_run01.txt, and record:
+- Query text
+- Chunking settings (sizes, overlap)
+- Retrieval mode (hybrid vs vector-only)
+- Retrieved chunk IDs/sources and scores
+- Prompt variant (strict vs concise)
+- Answer summary + your note on accuracy / hallucination risk
+- Adversarial tests (Part E): what broke, what you changed

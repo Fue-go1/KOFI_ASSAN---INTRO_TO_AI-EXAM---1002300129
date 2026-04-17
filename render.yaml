@@ -1,0 +1,24 @@
+# Student: Kofi Assan | Index: 1002300129 | CS4241
+# Deploy: New → Blueprint → connect repo → Render loads this file.
+# If the build times out (PyTorch + embedding ~1.6k chunks), run locally:
+#   python scripts/download_data.py && python scripts/build_index.py
+# then commit artifacts: git add -f data/index data/raw && git commit && git push
+
+services:
+  - type: web
+    name: ai-1002300129-rag
+    runtime: python
+    plan: free
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -r requirements.txt
+      python scripts/download_data.py
+      python scripts/build_index.py
+    startCommand: streamlit run app.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_CHAT_MODEL
+        value: gpt-4o-mini
+      - key: HF_TOKEN
+        sync: false
