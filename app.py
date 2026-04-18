@@ -5,8 +5,11 @@ Run from project root: streamlit run app.py
 """
 from __future__ import annotations
 
+import base64
 import logging
+import random
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 import streamlit as st
@@ -33,6 +36,32 @@ from rag.store import FaissStore  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 INDEX_DIR = ROOT / "data" / "index"
+_FONTS_DIR = ROOT / "assets" / "fonts"
+
+# Orbitron loads in the browser (geometric HUD). Name "Prosty Extended Bold" only works if installed
+# or if you add a licensed .woff2 as assets/fonts/ProstyExtended-Bold.woff2 (embedded via @font-face).
+_WEB_FONT_IMPORT = (
+    "@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@700;800;900&display=swap');"
+)
+
+
+@lru_cache(maxsize=1)
+def _prosty_font_face_css() -> str:
+    for name in ("ProstyExtended-Bold.woff2", "Prosty-Extended-Bold.woff2"):
+        path = _FONTS_DIR / name
+        if not path.is_file():
+            continue
+        b64 = base64.standard_b64encode(path.read_bytes()).decode("ascii")
+        return (
+            "@font-face{font-family:'Prosty Extended Bold';font-weight:700;font-style:normal;"
+            "font-display:swap;src:url(data:font/woff2;base64,"
+            + b64
+            + ") format('woff2');}"
+        )
+    return ""
+
+
+_UI_FONT_FAMILY = "'Prosty Extended Bold', Orbitron, system-ui, sans-serif"
 
 # SVG: grid scroll; draggable wave peaks (JS); sea motion via translate only (no ball-synced pulse)
 _LIME = "#DFFF00"
@@ -45,6 +74,117 @@ _BG_BALL_DUR_2 = 3.45
 _BG_BALL_DUR_3 = 4.1
 _BG_BALL_B2 = 0.5
 _BG_BALL_B3 = 1.05
+
+
+def _hud_build_random_pattern() -> tuple[
+    list[tuple[float, float, float]],
+    int,
+    float,
+    float,
+    str,
+    str,
+]:
+    """New layout each call: node count, positions, edge density, scale peak, cycle length, colors."""
+    rng = random.Random()
+    n_nodes = rng.randint(14, 22)
+    nodes = [
+        (
+            rng.uniform(38, 962),
+            rng.uniform(38, 962),
+            rng.uniform(0, 2.2),
+        )
+        for _ in range(n_nodes)
+    ]
+    k_near = rng.choice([2, 3])
+    max_scale = round(rng.uniform(1.28, 1.5), 3)
+    fade_cycle_s = round(rng.uniform(9.0, 13.0), 2)
+    er, eg, eb = rng.randint(120, 190), rng.randint(25, 75), rng.randint(25, 75)
+    edge_stroke = f"#{er:02x}{eg:02x}{eb:02x}"
+    nr, ng, nb = min(255, er + rng.randint(40, 90)), max(0, eg - 10), max(0, eb - 5)
+    node_fill = f"#{nr:02x}{ng:02x}{nb:02x}"
+    return nodes, k_near, max_scale, fade_cycle_s, edge_stroke, node_fill
+
+
+def _hud_k_nearest_edges(
+    positions: list[tuple[float, float]], k: int = 2
+) -> list[tuple[int, int]]:
+    """Undirected edges from each node to its k nearest neighbors (deduped)."""
+    n = len(positions)
+    edges: set[tuple[int, int]] = set()
+    for i in range(n):
+        xi, yi = positions[i]
+        dists: list[tuple[float, int]] = []
+        for j in range(n):
+            if i == j:
+                continue
+            xj, yj = positions[j]
+            d = (xi - xj) ** 2 + (yi - yj) ** 2
+            dists.append((d, j))
+        dists.sort(key=lambda t: t[0])
+        for _, j in dists[:k]:
+            a, b = (i, j) if i < j else (j, i)
+            edges.add((a, b))
+    return sorted(edges)
+
+
+def _hud_pulse_overlay_html(
+    nodes: list[tuple[float, float, float]],
+    *,
+    k_nearest: int = 2,
+    max_scale: float = 1.38,
+    fade_cycle_s: float = 11.0,
+    edge_stroke: str = "#993333",
+    node_fill: str = "#cc4433",
+) -> str:
+    """Full-viewport HUD: opacity fades while scale increases; reset invisibly between cycles."""
+    vb = 1000.0
+    hc = vb / 2.0
+    positions = [(x, y) for x, y, _ in nodes]
+    edges = _hud_k_nearest_edges(positions, k=k_nearest)
+    ring_stroke = "#ff6644"
+    pulse_s = 2.35
+    parts: list[str] = [
+        '<div class="acity-hud-pulse" aria-hidden="true">',
+        f'<svg width="100%" height="100%" viewBox="0 0 {vb:g} {vb:g}" '
+        'preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" '
+        'style="display:block;width:100%;height:100%;">',
+        '<g id="hudNetworkCycle" opacity="0">'
+        f'<animate attributeName="opacity" dur="{fade_cycle_s}s" repeatCount="indefinite" '
+        'calcMode="linear" keyTimes="0;0.05;0.66;0.7;1" '
+        'values="0;0.52;0;0;0"/>',
+        f'<g transform="translate({hc},{hc})">'
+        "<g>"
+        f'<animateTransform attributeName="transform" type="scale" additive="replace" '
+        f'dur="{fade_cycle_s}s" repeatCount="indefinite" calcMode="linear" '
+        'keyTimes="0;0.05;0.66;0.7;1" '
+        f'values="1;1;{max_scale};{max_scale};1"/>'
+        f'<g transform="translate({-hc},{-hc})">',
+        f'<g stroke="{edge_stroke}" stroke-width="1.25" stroke-linecap="round" opacity="0.55" fill="none">',
+    ]
+    for i, j in edges:
+        x1, y1 = positions[i]
+        x2, y2 = positions[j]
+        parts.append(
+            f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}"/>'
+        )
+    parts.append("</g>")
+    for (cx, cy, begin) in nodes:
+        parts.append(
+            f'<g transform="translate({cx:.1f},{cy:.1f})">'
+            f'<circle r="3" fill="{node_fill}" stroke="#1a0505" stroke-width="0.5" opacity="0.92"/>'
+            f'<circle r="3" fill="none" stroke="{ring_stroke}" stroke-width="1.1" vector-effect="non-scaling-stroke" opacity="0.55">'
+            f'<animate attributeName="r" values="3;42" dur="{pulse_s}s" begin="{begin:.3f}s" '
+            f'repeatCount="indefinite" calcMode="spline" '
+            f'keyTimes="0;1" keySplines="0.2 0.8 0.2 1"/>'
+            f'<animate attributeName="opacity" values="0.52;0" dur="{pulse_s}s" begin="{begin:.3f}s" '
+            f'repeatCount="indefinite" calcMode="spline" '
+            f'keyTimes="0;1" keySplines="0.1 0.9 0.2 1"/>'
+            "</circle>"
+            "</g>"
+        )
+    parts.append("</g></g></g></g></svg></div>")
+    return "".join(parts)
+
 
 _WAVE_PEAK_DRAG_JS = """
 <script>
@@ -115,8 +255,12 @@ _WAVE_PEAK_DRAG_JS = """
 
 _WAVE_BANNER_HTML = (
     f"""
-<style>html,body{{margin:0;padding:0;background:#000;height:100%;}}</style>
-<div id="waveBannerShell" style="font-family:'Segoe UI',system-ui,sans-serif;width:100%;
+<style>
+{_WEB_FONT_IMPORT}
+{_prosty_font_face_css()}
+html,body{{margin:0;padding:0;background:#000;height:100%;font-family:{_UI_FONT_FAMILY};}}
+</style>
+<div id="waveBannerShell" style="font-family:{_UI_FONT_FAMILY};width:100%;
   margin:0;padding:0;box-sizing:border-box;background:#000000;">
   <svg id="waveSvg" viewBox="0 0 1200 200" xmlns="http://www.w3.org/2000/svg"
        preserveAspectRatio="xMidYMid meet" role="img"
@@ -210,21 +354,139 @@ _WAVE_BANNER_HTML = (
         </circle>
       </g>
     </g>
-    <text x="28" y="168" fill="#ffffff" font-size="26" font-weight="700" letter-spacing="0.06em"
-          font-family="Segoe UI,system-ui,sans-serif">ACADEMIC</text>
-    <text x="28" y="194" fill="{_LIME}" font-size="26" font-weight="700" letter-spacing="0.06em"
-          font-family="Segoe UI,system-ui,sans-serif">RAG</text>
   </svg>
 </div>
 """
     + _WAVE_PEAK_DRAG_JS
 )
 
+# Full-page decoration: "--" lines scrolling upward forever (two identical halves → seamless loop)
+_DASH_MARQUEE_ROWS = 72
+_DASH_MARQUEE_STACK = "<br/>".join(["--"] * _DASH_MARQUEE_ROWS)
+_FLOAT_DASH_HTML = (
+    f"""
+<style>
+  @keyframes acity_dash_up {{
+    0% {{ transform: translateY(0); }}
+    100% {{ transform: translateY(-50%); }}
+  }}
+  .acity-dash-bg {{
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    overflow: hidden;
+  }}
+  .acity-dash-bg__rail {{
+    position: absolute;
+    top: 0;
+    display: flex;
+    flex-direction: column;
+    width: 2.75rem;
+    opacity: 0.2;
+    font-size: 13px;
+    line-height: 2rem;
+    font-weight: 700;
+    font-family: {_UI_FONT_FAMILY};
+    color: rgba(255, 255, 255, 0.72);
+    text-align: center;
+    animation: acity_dash_up 24s linear infinite;
+    will-change: transform;
+  }}
+  .acity-dash-bg__rail--left {{
+    left: clamp(8px, 2.8vw, 56px);
+    right: auto;
+  }}
+  .acity-dash-bg__rail--right {{
+    right: clamp(8px, 2.8vw, 56px);
+    left: auto;
+  }}
+  .acity-dash-bg__half {{ flex: 0 0 auto; }}
+</style>
+<div class="acity-dash-bg" aria-hidden="true">
+  <div class="acity-dash-bg__rail acity-dash-bg__rail--left">
+    <div class="acity-dash-bg__half">"""
+    + _DASH_MARQUEE_STACK
+    + """</div>
+    <div class="acity-dash-bg__half">"""
+    + _DASH_MARQUEE_STACK
+    + """</div>
+  </div>
+  <div class="acity-dash-bg__rail acity-dash-bg__rail--right">
+    <div class="acity-dash-bg__half">"""
+    + _DASH_MARQUEE_STACK
+    + """</div>
+    <div class="acity-dash-bg__half">"""
+    + _DASH_MARQUEE_STACK
+    + """</div>
+  </div>
+</div>
+"""
+)
+
 st.set_page_config(page_title="ACity RAG (IT3241)", layout="wide")
+
 st.markdown(
     """
     <style>
-      .stApp { background-color: #000000 !important; }
+      """
+    + _WEB_FONT_IMPORT
+    + _prosty_font_face_css()
+    + """
+      .stApp {
+        background-color: #000000 !important;
+        font-family: """
+    + _UI_FONT_FAMILY
+    + """ !important;
+        letter-spacing: 0.06em;
+      }
+      div.acity-hud-pulse {
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        width: 100vw !important;
+        height: 100vh !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        z-index: 0 !important;
+        pointer-events: none !important;
+        overflow: hidden !important;
+        box-sizing: border-box !important;
+      }
+      .stApp h1 {
+        font-family: """
+    + _UI_FONT_FAMILY
+    + """ !important;
+        font-weight: 800 !important;
+        letter-spacing: 0.14em !important;
+        text-transform: uppercase !important;
+      }
+      .stApp h2, .stApp h3 {
+        font-family: """
+    + _UI_FONT_FAMILY
+    + """ !important;
+        font-weight: 700 !important;
+        letter-spacing: 0.1em !important;
+      }
+      .stApp [data-testid="stHeader"] {
+        font-family: """
+    + _UI_FONT_FAMILY
+    + """ !important;
+      }
+      .stApp pre, .stApp code,
+      .stApp [data-testid="stCodeBlock"],
+      .stApp .stMarkdown pre {
+        font-family: ui-monospace, "Cascadia Code", Consolas, monospace !important;
+        letter-spacing: normal !important;
+        text-transform: none !important;
+      }
+      .stApp [data-testid="stHeader"],
+      .stApp section[data-testid="stSidebar"],
+      .stApp [data-testid="stAppViewContainer"],
+      .stApp .main {
+        position: relative;
+        z-index: 1;
+      }
       section[data-testid="stSidebar"] { background-color: #0a0a0a !important; }
       div[data-testid="stToolbar"] { background-color: transparent !important; }
       /* High-visibility primary — Run RAG */
@@ -262,6 +524,19 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+_hud_nodes, _hud_k, _hud_mx, _hud_dur, _hud_edge, _hud_node = _hud_build_random_pattern()
+st.markdown(
+    _hud_pulse_overlay_html(
+        _hud_nodes,
+        k_nearest=_hud_k,
+        max_scale=_hud_mx,
+        fade_cycle_s=_hud_dur,
+        edge_stroke=_hud_edge,
+        node_fill=_hud_node,
+    ),
+    unsafe_allow_html=True,
+)
+st.markdown(_FLOAT_DASH_HTML, unsafe_allow_html=True)
 st.title("Academic City RAG Assistant")
 st.caption("Kofi Assan · 10022300129 · IT3241 — manual RAG (no LangChain/LlamaIndex)")
 components.html(_WAVE_BANNER_HTML, height=288, scrolling=False)
