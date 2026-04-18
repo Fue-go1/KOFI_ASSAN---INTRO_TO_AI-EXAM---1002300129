@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import logging
 import random
+import secrets
 import sys
 from functools import lru_cache
 from pathlib import Path
@@ -76,39 +77,8 @@ _BG_BALL_B2 = 0.5
 _BG_BALL_B3 = 1.05
 
 
-def _hud_build_random_pattern() -> tuple[
-    list[tuple[float, float, float]],
-    int,
-    float,
-    float,
-    str,
-    str,
-]:
-    """New layout each call: node count, positions, edge density, scale peak, cycle length, colors."""
-    rng = random.Random()
-    n_nodes = rng.randint(14, 22)
-    nodes = [
-        (
-            rng.uniform(38, 962),
-            rng.uniform(38, 962),
-            rng.uniform(0, 2.2),
-        )
-        for _ in range(n_nodes)
-    ]
-    k_near = rng.choice([2, 3])
-    max_scale = round(rng.uniform(1.28, 1.5), 3)
-    fade_cycle_s = round(rng.uniform(9.0, 13.0), 2)
-    er, eg, eb = rng.randint(120, 190), rng.randint(25, 75), rng.randint(25, 75)
-    edge_stroke = f"#{er:02x}{eg:02x}{eb:02x}"
-    nr, ng, nb = min(255, er + rng.randint(40, 90)), max(0, eg - 10), max(0, eb - 5)
-    node_fill = f"#{nr:02x}{ng:02x}{nb:02x}"
-    return nodes, k_near, max_scale, fade_cycle_s, edge_stroke, node_fill
-
-
-def _hud_k_nearest_edges(
-    positions: list[tuple[float, float]], k: int = 2
-) -> list[tuple[int, int]]:
-    """Undirected edges from each node to its k nearest neighbors (deduped)."""
+def _hud_k_nearest_edges(positions: list[tuple[float, float]], k: int) -> set[tuple[int, int]]:
+    """Undirected edges from each node to its k nearest neighbors."""
     n = len(positions)
     edges: set[tuple[int, int]] = set()
     for i in range(n):
@@ -122,15 +92,87 @@ def _hud_k_nearest_edges(
             dists.append((d, j))
         dists.sort(key=lambda t: t[0])
         for _, j in dists[:k]:
-            a, b = (i, j) if i < j else (j, i)
-            edges.add((a, b))
+            edges.add((min(i, j), max(i, j)))
+    return edges
+
+
+def _hud_random_edges(
+    rng: random.Random,
+    positions: list[tuple[float, float]],
+) -> list[tuple[int, int]]:
+    """Varied topologies so layouts look different each run (caller should use SystemRandom)."""
+    n = len(positions)
+    edges: set[tuple[int, int]] = set()
+    mode = rng.choice(("knn", "knn_plus", "random_mesh", "ring", "hub"))
+    if mode == "knn":
+        edges |= _hud_k_nearest_edges(positions, rng.choice((2, 3)))
+    elif mode == "knn_plus":
+        edges |= _hud_k_nearest_edges(positions, rng.choice((2, 3)))
+        for _ in range(rng.randint(6, 20)):
+            i, j = rng.randrange(n), rng.randrange(n)
+            if i != j:
+                edges.add((min(i, j), max(i, j)))
+    elif mode == "random_mesh":
+        m = rng.randint(max(n + 4, 16), n * 4 + 8)
+        for _ in range(m):
+            i, j = rng.randrange(n), rng.randrange(n)
+            if i != j:
+                edges.add((min(i, j), max(i, j)))
+    elif mode == "ring":
+        order = list(range(n))
+        rng.shuffle(order)
+        for a in range(n):
+            i, j = order[a], order[(a + 1) % n]
+            edges.add((min(i, j), max(i, j)))
+    else:  # hub
+        hub = rng.randrange(n)
+        for i in range(n):
+            if i != hub:
+                edges.add((min(hub, i), max(hub, i)))
+        for _ in range(rng.randint(2, 12)):
+            i, j = rng.randrange(n), rng.randrange(n)
+            if i != j:
+                edges.add((min(i, j), max(i, j)))
     return sorted(edges)
+
+
+def _hud_build_random_pattern() -> tuple[
+    list[tuple[float, float, float]],
+    list[tuple[int, int]],
+    float,
+    float,
+    str,
+    str,
+]:
+    """New layout each call — SystemRandom so patterns are not fixed by global random.seed()."""
+    rng = random.SystemRandom()
+    n_nodes = rng.randint(12, 24)
+    margin_lo, margin_hi = rng.uniform(28, 55), rng.uniform(905, 972)
+    nodes = [
+        (
+            rng.uniform(margin_lo, margin_hi),
+            rng.uniform(margin_lo, margin_hi),
+            rng.uniform(0, 2.4),
+        )
+        for _ in range(n_nodes)
+    ]
+    positions = [(x, y) for x, y, _ in nodes]
+    edge_list = _hud_random_edges(rng, positions)
+    max_scale = round(rng.uniform(1.22, 1.55), 3)
+    fade_cycle_s = round(rng.uniform(8.5, 14.0), 2)
+    er, eg, eb = rng.randint(110, 200), rng.randint(20, 85), rng.randint(20, 85)
+    edge_stroke = f"#{er:02x}{eg:02x}{eb:02x}"
+    nr = min(255, er + rng.randint(35, 100))
+    ng = max(0, eg - rng.randint(0, 25))
+    nb = max(0, eb - rng.randint(0, 25))
+    node_fill = f"#{nr:02x}{ng:02x}{nb:02x}"
+    return nodes, edge_list, max_scale, fade_cycle_s, edge_stroke, node_fill
 
 
 def _hud_pulse_overlay_html(
     nodes: list[tuple[float, float, float]],
     *,
-    k_nearest: int = 2,
+    edges: list[tuple[int, int]],
     max_scale: float = 1.38,
     fade_cycle_s: float = 11.0,
     edge_stroke: str = "#993333",
@@ -140,11 +182,10 @@ def _hud_pulse_overlay_html(
     vb = 1000.0
     hc = vb / 2.0
     positions = [(x, y) for x, y, _ in nodes]
-    edges = _hud_k_nearest_edges(positions, k=k_nearest)
     ring_stroke = "#ff6644"
     pulse_s = 2.35
     parts: list[str] = [
-        '<div class="acity-hud-pulse" aria-hidden="true">',
+        f'<div class="acity-hud-pulse" aria-hidden="true" data-hud-rev="{secrets.token_hex(8)}">',
         f'<svg width="100%" height="100%" viewBox="0 0 {vb:g} {vb:g}" '
         'preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" '
         'style="display:block;width:100%;height:100%;">',
@@ -524,11 +565,11 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-_hud_nodes, _hud_k, _hud_mx, _hud_dur, _hud_edge, _hud_node = _hud_build_random_pattern()
+_hud_nodes, _hud_edges, _hud_mx, _hud_dur, _hud_edge, _hud_node = _hud_build_random_pattern()
 st.markdown(
     _hud_pulse_overlay_html(
         _hud_nodes,
-        k_nearest=_hud_k,
+        edges=_hud_edges,
         max_scale=_hud_mx,
         fade_cycle_s=_hud_dur,
         edge_stroke=_hud_edge,
