@@ -6,10 +6,12 @@ Run from project root: streamlit run app.py
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import random
 import secrets
 import sys
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
@@ -551,12 +553,81 @@ st.markdown(
         outline: 3px solid #f8ff99 !important;
         outline-offset: 3px !important;
       }
+      /* Make sidebar scrollable */
+      .stSidebar > div:first-child {
+        overflow-y: auto !important;
+        max-height: 100vh !important;
+      }
     </style>
     """,
     unsafe_allow_html=True,
 )
 st.markdown(_hud_pulse_overlay_html(num_patterns=5), unsafe_allow_html=True)
 st.markdown(_FLOAT_DASH_HTML, unsafe_allow_html=True)
+
+# File-based chat history persistence
+CHAT_HISTORY_FILE = ROOT / "chat_history.json"
+
+def load_chat_history_from_file():
+    """Load chat history from JSON file"""
+    try:
+        if CHAT_HISTORY_FILE.exists():
+            with open(CHAT_HISTORY_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"Error loading chat history: {e}")
+    return []
+
+def save_chat_history_to_file(history):
+    """Save chat history to JSON file"""
+    try:
+        with open(CHAT_HISTORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
+    except IOError as e:
+        print(f"Error saving chat history: {e}")
+
+# Initialize chat history from file
+if 'chat_history' not in st.session_state:
+    st.session_state.chat_history = load_chat_history_from_file()
+
+# JavaScript for localStorage operations (as backup)
+CHAT_STORAGE_JS = """
+<script>
+(function() {
+    // Save chat history to localStorage
+    window.saveChatHistory = function(history) {
+        try {
+            localStorage.setItem('acity_chat_history', JSON.stringify(history));
+            console.log('Saved chat history to localStorage:', history.length, 'entries');
+        } catch (e) {
+            console.error('Failed to save chat history:', e);
+        }
+    };
+    
+    // Load chat history from localStorage
+    window.loadChatHistory = function() {
+        try {
+            const stored = localStorage.getItem('acity_chat_history');
+            return stored ? JSON.parse(stored) : [];
+        } catch (e) {
+            console.error('Failed to load chat history:', e);
+            return [];
+        }
+    };
+    
+    // Clear chat history from localStorage
+    window.clearChatHistory = function() {
+        try {
+            localStorage.removeItem('acity_chat_history');
+        } catch (e) {
+            console.error('Failed to clear chat history:', e);
+        }
+    };
+})();
+</script>
+"""
+
+st.components.v1.html(CHAT_STORAGE_JS, height=0)
 st.title("Academic City RAG Assistant")
 st.caption("Kofi Assan · 10022300129 · CS4241 — manual RAG (no LangChain/LlamaIndex)")
 components.html(_WAVE_BANNER_HTML, height=180, scrolling=False)
@@ -576,6 +647,33 @@ def load_store():
 store = load_store()
 
 with st.sidebar:
+    st.subheader("Chat History")
+    
+    # Chat history display
+    if st.session_state.chat_history:
+        for i, chat in enumerate(reversed(st.session_state.chat_history)):
+            with st.expander(f"{chat['timestamp'][:19].replace('T', ' ')} - {chat['query'][:50]}{'...' if len(chat['query']) > 50 else ''}", expanded=False):
+                st.markdown(f"**Query:** {chat['query']}")
+                st.markdown(f"**Answer:** {chat['answer']}")
+                if chat.get('retrieval_info'):
+                    st.markdown(f"**Sources:** {', '.join(chat['retrieval_info'].get('sources', []))}")
+    else:
+        st.caption("No chat history yet")
+    
+    # Clear history button
+    if st.button("Clear Chat History", use_container_width=True):
+        st.session_state.chat_history = []
+        save_chat_history_to_file([])
+        clear_js = """
+        <script>
+        window.clearChatHistory();
+        </script>
+        """
+        st.components.v1.html(clear_js, height=0)
+        st.rerun()
+    
+    st.divider()
+    
     st.subheader("Retrieval")
     use_hybrid = st.toggle("Hybrid (vector + BM25)", value=True)
     use_expansion = st.toggle("Query expansion (Part B)", value=False, disabled=not use_hybrid)
@@ -654,6 +752,35 @@ if st.button("Run RAG", type="primary") and query.strip():
 
     st.subheader("Answer")
     st.write(answer)
+    
+    # Save to chat history
+    chat_entry = {
+        'timestamp': datetime.now().isoformat(),
+        'query': query,
+        'answer': answer,
+        'retrieval_info': {
+            'mode': "hybrid" if use_hybrid else "vector_only",
+            'sources': list({h.chunk.source for h in hits}),
+            'num_chunks': len(hits)
+        }
+    }
+    st.session_state.chat_history.append(chat_entry)
+    
+    # Save to file (primary method)
+    save_chat_history_to_file(st.session_state.chat_history)
+    
+    # Also save to localStorage (backup method)
+    save_history_js = f"""
+    <script>
+    (function() {{
+        const history = window.loadChatHistory();
+        history.push({json.dumps(chat_entry)});
+        window.saveChatHistory(history);
+        console.log('Chat saved to file and localStorage');
+    }})();
+    </script>
+    """
+    st.components.v1.html(save_history_js, height=0)
 
     with st.expander("Retrieved chunks & scores"):
         for h in hits:
@@ -685,7 +812,3 @@ if st.button("Run RAG", type="primary") and query.strip():
 elif query.strip():
     st.info("Click **Run RAG** to query the index.")
 
-st.markdown(
-    "---\n**Submission checklist:** GitHub repo `ai_10022300129`, deploy URL, "
-    "invite **GodwinDansoAcity**, email lecturer with subject line format from the QP."
-)
